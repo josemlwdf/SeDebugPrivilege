@@ -53,6 +53,9 @@ or
 - EnableSeDebugPrivilege Opens the current process token and requests the SeDebugPrivilege.
 
 - OpenWinlogonHandle Enumerates running processes, finds winlogon.exe, and opens a handle with PROCESS_CREATE_PROCESS (or PROCESS_ALL_ACCESS fallback).
+  
+  <img width="612" height="507" alt="image" src="https://github.com/user-attachments/assets/32936c7d-de5c-4f19-b030-99c764539616" />
+
 
 - CreateProcessFromHandle
 
@@ -61,6 +64,8 @@ or
     - Updates the attribute list to set the parent process handle.
 
     - Calls CreateProcessW with EXTENDED_STARTUPINFO_PRESENT to spawn the target as a child of `winlogon.exe`
+      
+    <img width="752" height="265" alt="image" src="https://github.com/user-attachments/assets/3ba46717-d674-4ad4-8ca1-0f1cadd72c72" />
 
 
 # Error Handling
