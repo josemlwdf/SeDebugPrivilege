@@ -56,11 +56,11 @@ or
 
 - CreateProcessFromHandle
 
-    Initializes a PROC_THREAD_ATTRIBUTE_LIST, resizing it on ERROR_INSUFFICIENT_BUFFER.
+-- Initializes a PROC_THREAD_ATTRIBUTE_LIST, resizing it on ERROR_INSUFFICIENT_BUFFER.
 
-    Updates the attribute list to set the parent process handle.
+-- Updates the attribute list to set the parent process handle.
 
-    Calls CreateProcessW with EXTENDED_STARTUPINFO_PRESENT to spawn the target as a child of `winlogon.exe`
+-- Calls CreateProcessW with EXTENDED_STARTUPINFO_PRESENT to spawn the target as a child of `winlogon.exe`
 
 
 # Error Handling
