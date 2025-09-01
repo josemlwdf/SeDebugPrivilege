@@ -3,6 +3,8 @@
 #include <tlhelp32.h>
 #include <string.h>
 
+// Compilation instructions
+// x86_64-w64-mingw32-gcc SeDebugPrivilege.c -o SeDebugPrivilegeExploit.exe -municode -mconsole
 // No need to redefine ERROR_INSUFFICIENT_BUFFER as it's already in winerror.h
 
 // Function prototypes
@@ -355,4 +357,5 @@ int wmain(int argc, wchar_t* argv[])
     wprintf(L"[*] Press Enter to exit...\n");
     getchar();
     return 0;
+
 }
