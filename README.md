@@ -21,20 +21,20 @@ It’s designed for educational and authorized testing purposes on Windows.
 
 ## Features
 
-- Token privilege escalation via AdjustTokenPrivileges
+- Token privilege escalation via `AdjustTokenPrivileges`
 
-- Detailed Win32 error reporting with FormatMessageW
+- Detailed Win32 error reporting with `FormatMessageW`
 
-- Process enumeration using CreateToolhelp32Snapshot and Process32First/Next
+- Process enumeration using `CreateToolhelp32Snapshot` and `Process32First/Next`
 
-- Extended startup info (STARTUPINFOEX) with PROC_THREAD_ATTRIBUTE_PARENT_PROCESS
+- Extended startup info (`STARTUPINFOEX`) with `PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`
 
 - Optional command-line parameter to launch any executable
 
 
 ## Requirements
 
-Elevated (Run as Administrator) console to enable SeDebugPrivilege and open handle to `winlogon.exe`
+Elevated (Run as Administrator) console to enable `SeDebugPrivileg`e and open handle to `winlogon.exe`
 
 
 ## Usage
@@ -48,40 +48,47 @@ or
     SeDebugPrivilegeExploit.exe  [command]
     
 
-# How It Works
+## How It Works
 
-- EnableSeDebugPrivilege Opens the current process token and requests the SeDebugPrivilege.
+- `EnableSeDebugPrivilege`
 
-- OpenWinlogonHandle Enumerates running processes, finds winlogon.exe, and opens a handle with PROCESS_CREATE_PROCESS (or PROCESS_ALL_ACCESS fallback).
+  Opens the current process token and requests the SeDebugPrivilege.
+
+- `OpenWinlogonHandle`
+
+  Enumerates running processes, finds `winlogon.exe`, and opens a handle with `PROCESS_CREATE_PROCESS` (or `PROCESS_ALL_ACCESS` fallback).
   
   <img width="612" height="507" alt="image" src="https://github.com/user-attachments/assets/32936c7d-de5c-4f19-b030-99c764539616" />
 
 
-- CreateProcessFromHandle
+- `CreateProcessFromHandle`
 
-    - Initializes a PROC_THREAD_ATTRIBUTE_LIST, resizing it on ERROR_INSUFFICIENT_BUFFER.
+    - Initializes a `PROC_THREAD_ATTRIBUTE_LIST`, resizing it on `ERROR_INSUFFICIENT_BUFFER`.
 
     - Updates the attribute list to set the parent process handle.
 
-    - Calls CreateProcessW with EXTENDED_STARTUPINFO_PRESENT to spawn the target as a child of `winlogon.exe`
+    - Calls `CreateProcessW` with `EXTENDED_STARTUPINFO_PRESENT` to spawn the target as a child of `winlogon.exe`
       
     <img width="752" height="265" alt="image" src="https://github.com/user-attachments/assets/3ba46717-d674-4ad4-8ca1-0f1cadd72c72" />
 
 
-# Error Handling
+## Error Handling
 
-  All Win32 calls are checked for failure. Errors are formatted via FormatMessageW, trimmed of trailing line breaks, and printed to the console. Buffers are cleaned up with LocalFree and heap allocations are released accordingly.
-  Security & Disclaimer
+  - All `Win32` calls are checked for failure.
+  - Errors are formatted via `FormatMessageW`, trimmed of trailing line breaks, and printed to the console.
+  - Buffers are cleaned up with `LocalFre`e and heap allocations are released accordingly.
+
+    
+## Security & Disclaimer
   
-  This code demonstrates powerful techniques that can be misused to bypass security boundaries.
+This code demonstrates powerful techniques that can be misused to bypass security boundaries.
   
-  Use it only in controlled environments with proper authorization. The author assumes no liability for misuse or damage caused by this code.
+`Use it only in controlled environments with proper authorization.` 
+`The author assumes no liability for misuse or damage caused by this code.`
 
-
-# DISCLAIMER
 Inspired by GitHub user [daem0nc0re](https://github.com/daem0nc0re) and [this code](https://github.com/daem0nc0re/PrivFu/tree/main/PrivilegedOperations/SeDebugPrivilegePoC)
 
 
-# License
+## License
 
 This project is distributed under the MIT License
