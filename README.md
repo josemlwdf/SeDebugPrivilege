@@ -78,6 +78,10 @@ or
   Use it only in controlled environments with proper authorization. The author assumes no liability for misuse or damage caused by this code.
 
 
+# DISCLAIMER
+Inspired by GitHub user [daem0nc0re](https://github.com/daem0nc0re) and [this code](https://github.com/daem0nc0re/PrivFu/tree/main/PrivilegedOperations/SeDebugPrivilegePoC)
+
+
 # License
 
 This project is distributed under the MIT License
