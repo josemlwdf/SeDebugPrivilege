@@ -19,13 +19,15 @@ Traverses up the directory tree if access is denied to the initial path
 ```SeTakeOwnershipPrivilegeExploit.exe "<path_to_file_or_folder>"```
 
 ### Example:
-SeTakeOwnershipPrivilegeExploit.exe "C:\RestrictedFolder"
+    
+    SeTakeOwnershipPrivilegeExploit.exe "C:\RestrictedFolder"
 
 
 ## Compilation
 
 To compile the project using mingw-w64 on a Linux system targeting Windows:
-```x86_64-w64-mingw32-gcc SeTakeOwnershipPrivilege.c -o SeTakeOwnershipPrivilegeExploit.exe -ladvapi32```
+    
+    x86_64-w64-mingw32-gcc SeTakeOwnershipPrivilege.c -o SeTakeOwnershipPrivilegeExploit.exe -ladvapi32
 
 This links against the advapi32 library to access Windows privilege APIs.
 
